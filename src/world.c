@@ -4,6 +4,7 @@
 
 #include <stdlib.h>
 #include <math.h>
+#include <threads.h>
 
 #include <def.h>
 #include <interval.h>
@@ -16,6 +17,8 @@
 #include <image.h>
 
 #include <world.h>
+
+#define NUMTHREADS 8
 
 static inline float linear_to_gamma(float linear_component) {
 	if (linear_component > 0.0f) {
@@ -163,39 +166,38 @@ bool sample_view(struct World2 *world, struct Camera *cam,
 	return true;
 }
 
+struct ForThread {
+	struct Camera *cam;
+	struct World2 *world;
+	uint8_v4 *img_data;
+	uint32_t yStart;
+	uint32_t yEnd;
+	uint32_t image_width;
+};
 
-// The returned image should be freed with stdlib.h free when done with it
-struct Image *World_render(struct World2 *world, size_t cam_idx) {
-	assert(cam_idx < world->camera_list_len);
-	struct Camera *cam = world->cameras[cam_idx];
-	struct Image *img = Image_new(cam->image_width, cam->image_height);
-	if (img == NULL) {
-		return NULL;
-	}
-	/*
-	uint32_t image_width = Image_get_width(img);
-	uint32_t image_height = Image_get_height(img);
+//void Render_for_thread(struct Camera *cam, struct World2 *world, uint8_v4 *img_data, uint32_t yStart, uint32_t yEnd, uint32_t image_width) {
+//void Render_for_thread(struct ForThread stuff) {
+//void Render_for_thread(void *stuff) {
+//int Render_for_thread(void *stuff) {
+int Render_for_thread(struct ForThread *stuff) {
+	for (uint32_t j = stuff->yStart; j < stuff->yEnd; j++) {
+//		printf("\x1b[1K\rScanlines remaining: %u", yEnd - j);
+//		fflush(stdout);
 
-	uint8_v4 *img_data = Image_get_data(img);
-
-	for (uint32_t j = 0; j < image_height; j++) {
-		printf("\x1b[1K\rScanlines remaining: %u", image_height - j);
-		fflush(stdout);
-
-		for (uint32_t i = 0; i < image_width; i++) {
+		for (uint32_t i = 0; i < stuff->image_width; i++) {
 			float_v4 pixel_color = {{0.0f, 0.0f, 0.0f, 0.0f}};
 
-			for (uint32_t sample = 0; sample < cam->samples_per_pixel; sample++) {
+			for (uint32_t sample = 0; sample < stuff->cam->samples_per_pixel; sample++) {
 				Ray r = {0};
-				Camera_get_ray(cam, &r, i, j);
+				Camera_get_ray(stuff->cam, &r, i, j);
 				
 				struct color_info colors = {0}; 
-				ray_color(world, cam->max_depth, &r, &colors);
+				ray_color(stuff->world, stuff->cam->max_depth, &r, &colors);
 
 				pixel_color = float_v4_add(pixel_color, colors.color);
 			}
 
-			pixel_color = float_v4_scale(pixel_color, cam->pixels_samples_scale);
+			pixel_color = float_v4_scale(pixel_color, stuff->cam->pixels_samples_scale);
 
 			pixel_color.x = linear_to_gamma(pixel_color.x);
 			pixel_color.y = linear_to_gamma(pixel_color.y);
@@ -207,14 +209,48 @@ struct Image *World_render(struct World2 *world, size_t cam_idx) {
 			pixel_color.z = 256.0f * Interval_clamp(intensity, pixel_color.z);
 			pixel_color.w = 256.0f; // no transparency
 
-			img_data[j * image_width + i] = float_v4_to_uint8_v4(pixel_color);
+			stuff->img_data[j * stuff->image_width + i] = float_v4_to_uint8_v4(pixel_color);
 		}
 	}
-	puts("\x1b[1K\rDone!");
-	
-	*/
+//	puts("\x1b[1K\rDone!");
+
+	return 0;
+}
+
+// The returned image should be freed with stdlib.h free when done with it
+struct Image *World_render(struct World2 *world, size_t cam_idx) {
+	assert(cam_idx < world->camera_list_len);
+	struct Camera *cam = world->cameras[cam_idx];
+	struct Image *img = Image_new(cam->image_width, cam->image_height);
+	if (img == NULL) {
+		return NULL;
+	}
 
 	uint32_t image_width = Image_get_width(img);
+	uint32_t image_height = Image_get_height(img);
+
+	uint8_v4 *img_data = Image_get_data(img);
+
+	thrd_t threads[NUMTHREADS];
+	struct ForThread threadsArgs[NUMTHREADS];
+	for (int i = 0; i < NUMTHREADS; i++) {
+		struct ForThread stuff;
+		stuff.cam = cam;
+		stuff.world = world;
+		stuff.img_data = img_data;
+		stuff.image_width = image_width;
+		stuff.yStart = (image_height / NUMTHREADS) * i;
+		stuff.yEnd = (image_height / NUMTHREADS) * (i+1);
+
+		threadsArgs[i] = stuff;
+		thrd_create(&threads[i], Render_for_thread, &threadsArgs[i]);
+	}
+
+	for (int i = 0; i < NUMTHREADS; i++) {
+		thrd_join(threads[i], NULL);
+	}
+	
+/*	uint32_t image_width = Image_get_width(img);
 	uint32_t image_height = Image_get_height(img);
 
 	float_v4 *color_data = malloc(image_width * image_height * sizeof(float_v4) * 2);
@@ -264,9 +300,9 @@ struct Image *World_render(struct World2 *world, size_t cam_idx) {
 
 		img_data[i] = float_v4_to_uint8_v4(color);
 	}
-	puts("\x1b[1K\rDone!");
+	puts("\x1b[1K\rDone!");*/
 
-	free(color_data);
+	//free(color_data);
 
 	return img;
 }

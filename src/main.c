@@ -18,7 +18,6 @@
 #include <materials/metal.h>
 #include <materials/dialectric.h>
 
-
 int main(void) {
 	
 	const float image_aspect_ratio = 16.0/9.0;
